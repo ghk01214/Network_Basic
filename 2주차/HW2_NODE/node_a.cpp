@@ -2,140 +2,115 @@
 #include <string>
 #include <thread>
 #include "conn.h"
-#define lagTime 200ms
+#define LAGTIME 200ms
 
 using namespace std;
 
 void do_node(char node_id)
 {
-	char nodeID{};
 	bool startNode{ false };
 
-	cout << "Enter NODE ID(A, B, C, D) : ";
-	cin >> nodeID;
+	// 입력 버퍼 초기화
+	getchar();
 
 	while (true)
 	{
-		if (nodeID == 'A' || nodeID == 'a')
+		if (node_id == 'A' || node_id == 'a')
 		{
 			if (!startNode)
 			{
 				cout << "노드 A를 시작합니다." << endl;
 				startNode = true ;
 			}
-			
-			std::string str;
 
-			cout << "문자를 전송할 노드의 ID와 전송할 문자를 같이 입력 : ";
-			getline(std::cin, str);
+			string str;
 
+			cout << "\n문자를 전송할 노드의 ID와 전송할 문자를 같이 입력 : ";
+			getline(cin, str);
+
+			// 노드 B~D로 전송 시작을 알림
 			g_conn.set(true);
-			this_thread::sleep_for(lagTime);
 
-			switch (str[0])
+			// 문자를 보낼 노드의 정보를 전송
+			for (int i = 0; i < 8; ++i)
 			{
-			case 'B': case 'b':
+				g_conn.set(str[0] & true);
+				this_thread::sleep_for(LAGTIME);
+
+				str[0] >>= 1;
+			}
+
+			// 문자열의 길이를 전송
+			for (int i = 0; i < 8; ++i)
 			{
-				for (int i = 0; i < 2; ++i)
+				int size = str.size() - 1;
+				size >>= i;
+
+				g_conn.set(size & true);
+				this_thread::sleep_for(LAGTIME);
+			}
+
+			// 문자열 전송
+			for (int i = 1; i < str.size(); ++i)
+			{
+				for (int j = 0; j < 8; ++j)
 				{
-					g_conn.set(false);
-					this_thread::sleep_for(lagTime);
+					g_conn.set(str[i] & true);
+					this_thread::sleep_for(LAGTIME);
+
+					str[i] >>= 1;
 				}
-
-				for (int i = 0; i < str.size(); ++i)
-				{
-					//char c = str[i];
-
-					for (int j = 0; j < 8; ++j)
-					{
-						g_conn.set(str[i] & true);
-
-						str[i] >>= 1;
-
-						this_thread::sleep_for(lagTime);
-					}
-				}
-
-				break;
-			}
-			case 'C': case 'c':
-			{
-				g_conn.set(false);
-				this_thread::sleep_for(lagTime);
-				g_conn.set(true);
-				this_thread::sleep_for(lagTime);
-
-				break;
-			}
-			case 'D': case 'd':
-			{
-				for (int i = 0; i < 2; ++i)
-				{
-					g_conn.set(true);
-					this_thread::sleep_for(lagTime);
-				}
-
-				break;
-			}
-			default:
-			{
-				cout << "잘못된 입력입니다." << endl;
-				cout << "다시 입력해주십시오." << endl;
-
-				break;
-			}
 			}
 		}
 		// ASCII 코드 값이 대소문자 b~d 사이의 값일 때
-		else if ((nodeID >= 66 && nodeID <= 68) || (nodeID >= 98 && nodeID <= 100))
+		else if ((node_id >= 66 && node_id <= 68) || (node_id >= 98 && node_id <= 100))
 		{
-			if (!startNode)
-			{
-				cout << "노드 " << nodeID << "를 시작합니다." << endl;
-				cout << "노드 A와 연결을 시도합니다." << endl;
-				startNode = true;
-			}
-
 			if (g_conn.get())
 			{
-				cout << "노드 " << nodeID << "와 연결되었습니다." << endl;
+				//cout << "노드 A의 메세지를 수신 중" << endl;
+				
+				char nodeID{};
 
-				this_thread::sleep_for(lagTime);
-
-				if (!g_conn.get())
+				for (int i = 0; i < 8; ++i)
 				{
-					this_thread::sleep_for(lagTime);
+					this_thread::sleep_for(LAGTIME);
 
-					//노드 B
-					if (!g_conn.get())
+					nodeID |= g_conn.get() << i;
+				}
+
+				if (node_id != toupper(nodeID))
+				{
+					g_conn.set(false);
+					continue;
+				}
+
+				cout << "\n노드 A의 메세지를 수신 중" << endl;
+
+				int size{};
+
+				for (int i = 0; i < 8; ++i)
+				{
+					this_thread::sleep_for(LAGTIME);
+
+					size |= g_conn.get() << i;
+				}
+
+				string str{};
+				str.resize(size);
+
+				for (int j = 0; j < size; ++j)
+				{
+					for (int i = 0; i < 8; ++i)
 					{
-						this_thread::sleep_for(lagTime);
+						this_thread::sleep_for(LAGTIME);
 
-					}
-					// 노드 C
-					else
-					{
-						this_thread::sleep_for(lagTime);
-
-
+						str[j] |= g_conn.get() << i;
 					}
 				}
-				// 노드 D
-				else
-				{
-					this_thread::sleep_for(lagTime);
 
-				}
+				cout << "노드 A로부터 [" << str << "]를 받았습니다." << endl << endl;
+				g_conn.set(false);
 			}
-
-
-		}
-		else
-		{
-			cout << "노드 " << nodeID << "가 존재하지 않습니다." << endl;
-			cout << "프로그램을 종료합니다." << endl;
-
-			break;
 		}
 	}
 }

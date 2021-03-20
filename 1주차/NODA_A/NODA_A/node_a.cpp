@@ -11,7 +11,8 @@ void do_node_a()
 	string str{};
 
 	cout << "Hello World, I am node A.\n";
-	do {
+	do
+	{
 		cout << "Enter a char to send: ";
 		getline(cin, str);
 		cout << "You enterd " << str << endl << endl;
@@ -26,7 +27,7 @@ void do_node_a()
 
 			size >>= 1;
 
-			this_thread::sleep_for(250ms);
+			this_thread::sleep_for(100ms);
 		}
 
 		for (int j = 0; j < str.size(); ++j)
@@ -37,7 +38,7 @@ void do_node_a()
 
 				str[j] >>= 1;
 
-				this_thread::sleep_for(250ms);
+				this_thread::sleep_for(100ms);
 			}
 		}
 		g_conn.set(false);

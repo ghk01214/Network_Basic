@@ -141,6 +141,7 @@
   <ItemGroup>
     <ClCompile Include="BASE_B.cpp" />
     <ClCompile Include="node_b.cpp" />
+    <ClCompile Include="소스.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="conn.h" />

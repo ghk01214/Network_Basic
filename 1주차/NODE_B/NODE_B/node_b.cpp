@@ -11,25 +11,27 @@ void do_node_b()
 
 	cout << "Hello World, I am node B.\n";
 	cout << "Waiting for a Message from Node A" << endl;
-	do {
-		bool gcinet_bit = false;
-		string str{};
-		int size{};
-
+	do
+	{
 		if (g_conn.get())
 		{
+			int size{};
+
 			for (int i = 0; i < 8; ++i)
 			{
-				this_thread::sleep_for(250ms);
+				this_thread::sleep_for(100ms);
 
 				size |= g_conn.get() << i;
 			}
+
+			string str{};
+			str.resize(size);
 
 			for (int j = 0; j < size; ++j)
 			{
 				for (int i = 0; i < 8; ++i)
 				{
-					this_thread::sleep_for(250ms);
+					this_thread::sleep_for(100ms);
 
 					str[j] |= g_conn.get() << i;
 				}
@@ -41,3 +43,5 @@ void do_node_b()
 	} while (false == end_node);
 	cout << "Bye.\n";
 }
+
+//01100001
