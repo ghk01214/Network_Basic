@@ -1,0 +1,94 @@
+네트워크 기초 숙제 #3
+
+1. 목적 : TCP/IP 모델의 링크 계층에 해당하는 기능 구현
+
+2. 목표 : 
+ - 복수의 노드를 실행했을 때 임의의 노드에서 임의의 노드로 문자열을 보내는 기능을 구현한다.
+ - 문자열은 누락 되지도 않고, 중복 전달되지도 않고, 가능한 한 오류없이 전달되어야 한다.
+ - 복수개의 노드가 동시에 전송을 시도했을 때에도 시간이 더 걸리더라도 제대로 전송되어야 한다. 
+
+3. 구현
+ - 첨부한 HW03 솔류션의 node.cpp파일을 수정하여 구현하라.
+ - 노드끼리는 g_conn 객체만을 사용해서 통신해야 한다.
+   * Socket이나 File등 다른 매체를 사용한 통신은 불허한다.
+
+4. HW03 설명
+ - 실행
+   * 우선 노드 ID를 설정한다.
+   * 다른 노드의 g_conn변경을 검출해서 출력하는 기능을 갖고 있다.
+ - 시작함수
+   * 아래 2개의 함수가 동시에 서로 독립적으로 실행된다. (멀티쓰레드로 구현되었음)
+   * do_node() : 샘플에서는 사용자의 입력을 do_node_NIC에 전달한다.
+   * do_node_NIC() : 샘플에서는 g_conn값의 변경을 모니터링하면서 do_node가 전달한 입력을 실행한다.
+
+5. 힌트
+ - g_conn의 감시와 세팅은 do_node_NIC()에서만 수행하는 것이 프로그램이 깔끔해 진다.
+ - do_node()와 do_node_NIC() 데이터 전달
+   * 전역 변수를 통해 데이터를 주고 받을 수 있으며, 상태 변수를 통해 전달 과정을 공유해야 한다.
+   * 예) send_state (0: 아무런 데이터가 없다,  1:데이터를 넣었으니 NIC는 받아 가라, 2: NIC가 다 받아서 처리했으니 다음 작업을 해라)
+
+volatile int send_state;
+char send_mess[200];
+
+void do_node()
+{
+   cout << "Enter: ";
+   while (true) {
+      cin.getline(send_mess, 199);
+      send_state = 1;
+      while (2 != send_state);
+      send_state = 0;
+   }
+}
+
+void do_node_NIC()
+{
+   while (true) {
+      while (1 != send_state);
+      cout << send_mess;
+      send_state = 2;
+      cout << "\nEnter: ";
+   }
+}
+
+
+ - Timing
+  * CS, MA, CA, CD등을 구현하기 위해서는 정밀한 타이밍이 필요하므로 chrono::high_resolution_clock()의 사용을 추천한다..
+  * 구현 예 : num개의 비트를 CLOCK마다 g_conn에 실어주는 함수. 비트는 value에서 가져 온다. 
+                다른 노드와 충돌해서 신호가 변경되었는가를 검사해서 리턴 한다. 전송이 끝나면 tp도 전송이 끝난 시간으로 업데이트 된다.
+
+const chrono::microseconds CLOCK{ 1000 }; 
+bool set_signal(chrono::high_resolution_clock::time_point& tp, int num, unsigned int value) 
+{
+   bool collision = false;
+   for (int i = 0; i < num; ++i) {
+      bool bit = (value & (1 << (num - i - 1))) != 0;
+      g_conn.set(bit);
+      while (chrono::high_resolution_clock::now() < tp + CLOCK)
+         if (g_conn.get() != bit) collision = true;
+      tp += CLOCK;
+   }
+   return collision;
+}
+
+...
+auto curr = high_resolution_clock::now();
+
+bool is_collision = set_signal(curr, 4, source);
+set_signal(curr, 4, dest);
+set_signal(curr, 8, char_data); 
+...
+
+6. 제출 내용
+ - node.cpp 파일
+ - 구현한 방법에 대한 설명
+ - 실행 스크린 샷
+
+7. 주의사항
+ - 복수의 노드에서 동시에 데이터를 전송할 때 충돌 처리가 구현되어 있어야 한다.
+  * 전송속도가 너무 빠르면 충돌상황을 테스트하기 어려우므로 전송속도를 늦춰서 테스트 할 예정
+  * 속도를 CLOCK const 변수로 설정할 수 있도록 하시오
+ - Node의 개수가 CPU의 Core개수 보다 많을 경우 빠른 전송속도에서 오류가 많이 남.
+  * Context Switch로 인한 timing 오류
+  * Quad Core CPU에서 테스트할 예정이므로 4개의 노드까지만 테스트할 예정
+  * Quad Core CPU가 없는 사람은 실습실 PC를 사용할 것
