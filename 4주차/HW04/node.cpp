@@ -1,5 +1,6 @@
 #include <iostream>
-
+#include <string>
+#include <chrono>
 #include "conn.h"
 
 using namespace std;
@@ -9,68 +10,169 @@ constexpr int NIC_STATE_IDLE = 0;
 constexpr int NIC_STATE_HAVE_CMD = 1;
 constexpr int NIC_STATE_DONE = 2;
 
-volatile bool g_value_from_NIC;
+bool active{ false };
+string sendMessage{};
+string recieveMessage{};
+const chrono::microseconds CLOCK{ 10000 };
 
-volatile char g_cmd_to_NIC;
-constexpr int CMD_QUIT = 0;
-constexpr int CMD_SET_CONN = 1;
-constexpr int CMD_RESET_CONN = 2;
-constexpr int CMD_GET_CONN = 3;
-
-bool send_command_to_NIC(int cmd)
+void send_command_to_NIC()
 {
-		g_cmd_to_NIC = cmd;
+	while (active);
+	if (!active)
+	{
 		g_send_state = NIC_STATE_HAVE_CMD;
-		while (NIC_STATE_DONE != g_send_state);
-		bool ret = g_value_from_NIC;
-		g_send_state = 0;
-		return ret;
+	}
+
+	while (g_send_state != NIC_STATE_DONE);
+
+	g_send_state = NIC_STATE_IDLE;
 }
 
 void do_node(char node_id)
 {
-	int a;
-	bool end_node = false;
+	cout << "Hello World, I am node " << node_id << "." << endl << endl;
 
-	cout << "Hello World, I am node " << node_id << ".\n";
-	for (;;) {
-		cout << "\nEnter CMD => 0.Quit,    1:Set CONN,     2:Reset CONN,     3:Read CONN : ";
-		cin >> a;
-		bool ret = send_command_to_NIC(a);
-		if (3 == a) {
-			cout << "g_conn is ";
-			if (true == ret) cout << "True\n";
-			else cout << "False\n";
-		}
+	while (true)
+	{
+		// 전송할 노드와 메세지를 입력
+		cout << "Enter destination node with a message to send : ";
+		getline(cin, sendMessage);
 
-		if (0 == a) break;
+		send_command_to_NIC();
 	}
 }
 
-void check_conn(const char* NIC_NAME,  bool& my_conn, CONN& g_conn)
+bool send_message(chrono::high_resolution_clock::time_point& tp, int num, unsigned int c, CONN& g_conn)
 {
-	if (my_conn != g_conn.get()) {
-		cout << "\n\n" << NIC_NAME << " changed to";
-		if (true == my_conn) cout << " False\n";
-		else cout << " True\n";
-		my_conn = !my_conn;
-		cout << "Enter CMD => ";
+	bool collision{ false };
+
+	for (int i{ 0 }; i < num; ++i)
+	{
+		bool bit{ (c & (1 << i)) != 0 };
+		g_conn.set(bit);
+
+		while (chrono::high_resolution_clock::now() < tp + CLOCK);
+
+		if (g_conn.get() != bit)
+			collision = true;
+
+		tp += CLOCK;
 	}
+
+	return collision;
 }
 
-void do_node_NIC(char node_id, CONN &g_conn)
+char recieve_message(chrono::high_resolution_clock::time_point& tp, int num, CONN& g_conn)
 {
-	bool my_conn = g_conn.get();
-	for (;;) {
-		while (NIC_STATE_HAVE_CMD != g_send_state)
-			check_conn("g_conn", my_conn, g_conn);
-		auto cmd = g_cmd_to_NIC;
-		switch (cmd) {
-		case CMD_SET_CONN: g_conn.set(true); my_conn = true; break;
-		case CMD_RESET_CONN: g_conn.set(false); my_conn = false;  break;
-		case CMD_GET_CONN: g_value_from_NIC = g_conn.get(); break;
+	char c{};
+
+	for (int i{ 0 }; i < num; ++i)
+	{
+		while (chrono::high_resolution_clock::now() < tp + CLOCK);
+
+		if (chrono::high_resolution_clock::now() > tp + CLOCK)
+		{
+			if (g_conn.get())
+			{
+				c |= 1 << i;
+			}
+
+			tp += CLOCK;
 		}
-		g_send_state = NIC_STATE_DONE;
-		if (CMD_QUIT == cmd) break;
+	}
+
+	if (num != 1)
+	{
+		recieveMessage.push_back(c);
+	}
+
+	return c;
+}
+
+void do_node_NIC(char node_id, CONN& g_conn)
+{
+	bool read{ false };
+	bool finish{ false };
+
+	while (true)
+	{
+		auto time = chrono::high_resolution_clock::now();
+
+		if (g_send_state == NIC_STATE_HAVE_CMD)
+		{
+			cout << "You entered [" << sendMessage << "]" << endl << endl;
+
+			// 수신 노드 정보 전송
+			send_message(time, 1, 1, g_conn);
+			send_message(time, 8, sendMessage[0], g_conn);
+			send_message(time, 1, 0, g_conn);
+
+			// 송신 노드 정보 전송
+			send_message(time, 1, 1, g_conn);
+			send_message(time, 8, node_id, g_conn);
+			send_message(time, 1, 0, g_conn);
+
+			// 메세지 전송
+			for (int i{ 1 }; i < sendMessage.length(); ++i)
+			{
+				send_message(time, 1, 1, g_conn);
+				send_message(time, 8, sendMessage[i], g_conn);
+				send_message(time, 1, 0, g_conn);
+			}
+
+			// 전송 종료 알림 전송
+			send_message(time, 1, 1, g_conn);
+			send_message(time, 8, '\0', g_conn);
+			send_message(time, 1, 0, g_conn);
+
+			sendMessage.clear();
+
+			g_send_state = NIC_STATE_DONE;
+		}
+		else if (g_send_state == NIC_STATE_IDLE)
+		{
+			if (!read)
+			{
+				read = g_conn.get();
+			}
+			else
+			{
+				active = true;
+
+				// 메세지 수신
+				recieve_message(time, 8, g_conn);
+				recieve_message(time, 1, g_conn);
+
+				read = false;
+
+				if (recieveMessage.back() == '\0')
+				{
+					if (recieveMessage[0] == node_id)
+					{
+						finish = true;
+					}
+					else
+					{
+						recieveMessage.clear();
+
+						active = false;
+					}
+				}
+			}
+
+			if (finish)
+			{
+				cout << endl << "Node " << recieveMessage[1] << " sent [";
+				recieveMessage.erase(0, 2);
+				cout << recieveMessage << "]" << endl;
+
+				recieveMessage.clear();
+
+				finish = false;
+				active = false;
+
+				cout << endl << "Enter destination node with a message to send : ";
+			}
+		}
 	}
 }
