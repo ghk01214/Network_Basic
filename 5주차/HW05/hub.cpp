@@ -36,9 +36,7 @@ struct NIC {						// g_conn을 관리하기 위한 관리 객체
 	int padding[64];				// 멀티코어 프로그래밍 시간에 다룰 내용, 성능 향상을 위해서 존재.
 };
 
-string message[4]{};
 const chrono::microseconds CLOCK{ 100000 };
-
 volatile bool g_end_hub = false;
 NIC g_nic[4];
 queue<FRAME> g_msg_queue;

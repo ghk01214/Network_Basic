@@ -1,242 +1,208 @@
 #include <iostream>
 #include <string>
-#include <chrono>
-#include <unordered_map>
+#include <map>
+#include <mutex>
 #include "conn.h"
 
 using namespace std;
 
-volatile bool g_end_node = false;
-volatile int g_send_state = 0;			// 0 : nothing to do,   1: node sent cmd to NIC,  2: NIC sent reply to node
-volatile int NIC_STATE_IDLE = 0;
-volatile int NIC_STATE_HAVE_CMD = 1;
-volatile int NIC_STATE_DONE = 2;
-
-bool active{ false };
-string sendMessage;
-const chrono::microseconds CLOCK{ 100000 };
-chrono::high_resolution_clock::time_point next_start_time;
-
-void send_message(string sMessage)
+enum FrameType
 {
-	while (g_send_state != 0);
+	requestARP = 75, responseARP, requestDHCP, responseDHCP, sendMessage
+};
 
-	sendMessage = sMessage;
-
-	g_send_state = 1;
-
-	while (g_send_state != 2);
-
-	g_send_state = 0;
-}
-
-int get_signal(chrono::high_resolution_clock::time_point& tp, CONN& g_conn, int num)
+struct ARPRequest
 {
-	int iBit = 0;
+	char fromMac;						// 0
+	char toMac;							// 0
+	char frameType = requestARP;		// ARP request = 75
+	int nodeAddress;
+};
 
-	for (int i = 0; i < num; ++i)
+struct ARPResponse
+{
+	char fromMac;
+	char toMac;
+	char frameType;		// ARP response = 76
+	int nodeAddress;
+	int macAddress;
+};
+
+struct DHCPRequest
+{
+	char fromMac;
+	const char toMac = 0;				// should be 0
+	char frameType = requestDHCP;		// DHCP request = 77
+};
+
+struct DHCPResponse
+{
+	char fromMac;
+	char toMac;
+	char frameType;		// DHCP response = 78
+	int nodeAddress;
+	int lanAddress;
+	int macAddress;
+};
+
+struct SendMessage
+{
+	char fromMac;
+	char toMac;
+	char frameType;		// MESSAGE packet = 78
+	int size;
+	string data;
+
+	SendMessage() { data.reserve(MAX_DATA_SIZE); }
+};
+
+class AddressManager
+{
+public:
+	int GetMacAddress(int nodeAddress)
 	{
-		iBit = iBit << 1;
+		int macAddress = -1;
 
-		if (g_conn.get())
-			++iBit;
+		tableLock.lock();
 
-		while (chrono::high_resolution_clock::now() < tp + CLOCK * (i + 1));
+		if (node2macTable.count(nodeAddress) != 0)
+			macAddress = node2macTable[nodeAddress];
+
+		tableLock.unlock();
+
+		return macAddress;
 	}
-
-	tp += CLOCK * num;
-
-	return iBit;
-}
-
-void do_node(char node_id)
-{
-	string message;
-
-	cout << "Hello World, I am node " << node_id << "." << endl << endl;
-
-	while (true)
+	void SetAddress(int macAddress, int nodeAddress)
 	{
-		// 전송할 노드와 메세지를 입력
-		cout << "Enter destination node with a message to send : ";
-		getline(cin, message);
+		tableLock.lock();
 
-		if (message == "q")
+		node2macTable[nodeAddress] = macAddress;
+		mac2nodeTable[macAddress] = nodeAddress;
+
+		tableLock.unlock();
+	}
+	int AssignNodeAddress(int macAddress)
+	{
+		int nodeAddress = -1;
+
+		tableLock.lock();
+
+		if (mac2nodeTable.count(macAddress) == 0)
 		{
-			g_end_node = true;
-
-			break;
-		}
-
-		cout << "You entered [" << message << "]" << endl << endl;
-		send_message(message);
-	}
-
-	cout << "End Program" << endl;
-}
-
-
-bool set_signal(chrono::high_resolution_clock::time_point& tp, CONN& g_conn, int num, unsigned int iBit)
-{
-	bool bCollision = false;
-
-	for (int i = 0; i < num; ++i)
-	{
-		bool bBit = (iBit & (1 << (num - i - 1))) != 0;
-
-		g_conn.set(iBit);
-
-		while (chrono::high_resolution_clock::now() < tp + CLOCK)
-		{
-			if (g_conn.get() != iBit)
-				bCollision = true;
-		}
-
-		tp += CLOCK;
-	}
-
-	return bCollision;
-}
-
-bool transmit_message(CONN& g_conn, int mac_addr)
-{
-	auto start_time = chrono::high_resolution_clock::now();
-	bool bCollision = set_signal(start_time, g_conn, 1, 1);
-
-	if (bCollision)
-	{
-		set_signal(start_time, g_conn, 1, 1);
-		set_signal(start_time, g_conn, 1, 0);
-
-		next_start_time = start_time + CLOCK * (1 + (rand() % 10));
-	}
-
-	bCollision = set_signal(start_time, g_conn, 4, mac_addr);
-
-	if (bCollision)
-	{
-		set_signal(start_time, g_conn, 1, 1);
-		set_signal(start_time, g_conn, 1, 0);
-
-		next_start_time = start_time + CLOCK * (1 + (rand() % 10));
-
-		return false;
-	}
-
-	bCollision = set_signal(start_time, g_conn, 1, 0);
-
-	if (bCollision)
-	{
-		set_signal(start_time, g_conn, 1, 1);
-		set_signal(start_time, g_conn, 1, 0);
-
-		next_start_time = start_time + CLOCK * (1 + (rand() % 10));
-
-		return false;
-	}
-
-	int iDestination = 1 << (sendMessage[0] - 'A');
-
-	set_signal(start_time, g_conn, 4, iDestination);
-	set_signal(start_time, g_conn, 8, sendMessage.length());
-
-	for (int i = 1; i < sendMessage.length(); ++i)
-	{
-		set_signal(start_time, g_conn, 8, sendMessage[i]);
-	}
-
-	//for (auto i = sendMessage.begin() + 1; i != sendMessage.end(); ++i)
-	//{
-	//	set_signal(start_time, g_conn, 8, *i);
-	//}
-
-	set_signal(start_time, g_conn, 1, 0);
-	g_send_state = 2;
-
-	return true;
-}
-
-void do_node_NIC(char node_id, CONN& g_conn)
-{
-	next_start_time = chrono::high_resolution_clock::now();
-	int mac_addr = 0;
-
-	switch (node_id)
-	{
-	case 'A':
-	{
-		mac_addr = 1;
-		
-		break;
-	}
-	case 'B':
-	{
-		mac_addr = 2;
-
-		break;
-	}
-	case 'C':
-	{
-		mac_addr = 4;
-
-		break;
-	}
-	case 'D':
-	{
-		mac_addr = 8;
-
-		break;
-	}
-	}
-
-	unordered_map<int, int> mac2node = { {1, 'A'}, {2, 'B'}, {4, 'C'}, {8, 'D'} };
-
-	do
-	{
-		while (!g_conn.get())
-		{
-			if ((g_send_state == 1) && (chrono::high_resolution_clock::now() > next_start_time))
+			for (int i = 2; i < 9; ++i)
 			{
-				transmit_message(g_conn, mac_addr);
-				
-				continue;
+				if (node2macTable.count(i)  == 0)
+				{
+					node2macTable[i] = macAddress;
+					mac2nodeTable[macAddress] = i;
+					nodeAddress = i;
+
+					break;
+				}
 			}
 		}
 
-		auto start_time = chrono::high_resolution_clock::now();
+		tableLock.unlock();
 
-		while (chrono::high_resolution_clock::now() < start_time + CLOCK + CLOCK / 2);
+		return nodeAddress;
+	}
+private:
+	mutex tableLock;
+	map<char, char> mac2nodeTable;
+	map<char, char> node2macTable;
+};
 
-		start_time += (CLOCK + CLOCK / 2);
+AddressManager addressManager;
 
-		char cSource = get_signal(start_time, g_conn, 4);
-		int iCd = get_signal(start_time, g_conn, 1);
+void DHCP(const char mac_addr, NIC& g_nic)
+{
+	if (mac_addr == 'A')
+	{
+		
+	}
+}
 
-		if (iCd == 1)
-		{
-			while (chrono::high_resolution_clock::now() < start_time + CLOCK * 2);
+void do_node(NIC& g_nic)
+{
+	const char mac_addr = g_nic.GetMACaddr();
 
-			continue;
-		}
+	DHCPRequest request;
+	request.fromMac = mac_addr;
 
-		int iDestination = get_signal(start_time, g_conn, 4);
-		int iLength = get_signal(start_time, g_conn, 8);
+	string frame;
+	frame.push_back(request.fromMac);
+	frame.push_back((char)request.toMac);
+	frame.push_back((char)request.frameType);
 
-		string sMessage;
+	if (mac_addr != 'A')
+		g_nic.SendFrame(sizeof(frame), &frame);
 
-		for (int i = 0; i < iLength; ++i)
-		{
-			sMessage[i] = get_signal(start_time, g_conn, 8);
-		}
+	SendMessage message;
+	message.fromMac = mac_addr;
+	message.data.reserve(MAX_DATA_SIZE);
 
-		sMessage[iLength] = 0;
+	cout << "Hello World, I am a node with MAC address [" << mac_addr << "]." << endl;
 
-		if (iDestination == mac_addr)
-		{
-			char sentNode = mac2node[cSource];
+	while (true)
+	{
+		cout << "\nEnter Message to Send : ";
+		getline(cin, message.data);
 
-			cout << "Node " << sentNode << " sent [" << sMessage << "]" << endl;
-			cout << "Enter destination node with a message to send : ";
-		}
-	} while (!g_end_node);
+		message.toMac = message.data[0];
+		g_nic.SendFrame(sizeof(message), &message);
+	}
+}
+
+void interrupt_from_link(NIC& g_nic, int recv_size, char* frame)
+{
+	const char mac_addr = g_nic.GetMACaddr();
+
+	switch (frame[2])
+	{
+	case requestARP:
+	{
+		ARPRequest* p = (ARPRequest*)frame;
+
+
+		break;
+	}
+	case responseARP:
+	{
+		ARPResponse* p = (ARPResponse*)frame;
+
+		break;
+	}
+	case requestDHCP:
+	{
+		DHCPRequest* p = (DHCPRequest*)frame;
+		int newNodeAddress = addressManager.AssignNodeAddress(p->fromMac);
+
+
+		break;
+	}
+	case responseDHCP:
+	{
+		DHCPResponse* p = (DHCPResponse*)frame;
+
+		if (mac_addr != p->toMac)
+			break;
+
+		break;
+	}
+	case sendMessage:
+	{
+
+		break;
+	}
+	}
+
+	char* from_mac = frame;
+	char* to_mac = frame + 1;
+	char* mess = frame + 2;
+
+	if (*to_mac != mac_addr)
+		return;
+	cout << "\n\nMessage from NODE " << *from_mac << " : ";
+	cout << mess << endl;
+	cout << "\nEnter Message to Send : ";
 }

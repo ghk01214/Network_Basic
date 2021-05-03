@@ -2,25 +2,23 @@
 #include <map>
 #include <vector>
 #include <thread>
+#include <concurrent_queue.h>
+
 using namespace std;
 #include <Windows.h>
 #include "conn.h"
 
 
-extern const unsigned int NUM_NODES;
-const unsigned int NUM_NODES = 4;		// 허브에서 연결 가능한 최대 노드 개수
-
-void do_hub();
-void do_hub_NIC0(CONN& conn);
-void do_hub_NIC1(CONN& conn);
-void do_hub_NIC2(CONN& conn);
-void do_hub_NIC3(CONN& conn);
-void do_node(char node_type);
-void do_node_NIC(char node_type, CONN& conn);
 
 #define SH_MEM_ID L"Conn"
 
-CONN g_conn[NUM_NODES];
+NIC g_nic;
+
+concurrency::concurrent_queue <RAW_FRAME> frame_queue;
+
+void do_node(NIC &g_nic);
+void interrupt_from_link(NIC &g_nic, int recv_size, char* frame);
+
 
 LPWSTR GetErrMessage(DWORD err_no)
 {
@@ -42,76 +40,113 @@ LPWSTR GetErrMessage(DWORD err_no)
 	return lpMsgBuf;
 }
 
-
-CONN::CONN() : stat(nullptr) {}
-void CONN::init(int i)
+void NIC::Init(char mac)
 {
-	constexpr int BLOCK_SIZE = 512;		// False Sharing을 막기위한 거리두기
-
+	mac_addr = mac;
+	const int BLOCK_SIZE = sizeof(RAW_FRAME);
 	while (true) {
 		HANDLE hSHM = OpenFileMapping(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, SH_MEM_ID);
 		if (0 == hSHM) {
-			hSHM = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, BLOCK_SIZE * NUM_NODES, SH_MEM_ID);
+			hSHM = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, BLOCK_SIZE, SH_MEM_ID);
 			if (0 == hSHM) {
 				int err = GetLastError();
 				wcout << L"전송 매체 연결에 실패했습니다. 다시 시도합니다." << endl;
 				continue;
 			}
 		}
-		stat = reinterpret_cast<bool*>(MapViewOfFile(hSHM, PAGE_READONLY, 0, 0, BLOCK_SIZE)) + BLOCK_SIZE * i;
-		if (nullptr == stat) {
+		raw_frame = reinterpret_cast<RAW_FRAME*>(MapViewOfFile(hSHM, PAGE_READONLY, 0, 0, BLOCK_SIZE));
+		if (nullptr == raw_frame) {
 			int err_no = GetLastError();
 			LPWSTR wmess = GetErrMessage(err_no);
 			wcout << L"Mapping Error[" << err_no << L"] " << wmess << endl;
 			LocalFree(wmess);
+			return;
 		}
 		break;
 	}
-	char port_id = 'A' + i;
-	wcout << L"허브의 Port " << port_id << L"가 활성화 되었습니다.\n";
+	last_seq_num = raw_frame->sequence;
 }
 
-void CONN::set(bool value)
+void NIC::check_recv()
 {
-	*stat = value;
+	if (raw_frame->sequence <= last_seq_num) {
+		this_thread::sleep_for(10ms);
+		return;
+	}
+	while (true == raw_frame->f_lock) {
+		bool old_value = false;
+		if (true == atomic_compare_exchange_strong(reinterpret_cast<atomic_bool *>(&raw_frame->f_lock), &old_value, true)) break;
+		this_thread::sleep_for(10ms);
+	}
+	frame_queue.push(*raw_frame);
+	last_seq_num = raw_frame->sequence;
+	raw_frame->f_lock = false;
 }
 
-bool CONN::get()
+void NIC::SendFrame(int frame_size, void* frame)
 {
-	return *stat;
+	using namespace chrono;
+
+	auto wait_time = system_clock::now() - raw_frame->last_update;
+	if (wait_time < 1s) {
+		check_recv();
+		this_thread::sleep_for(1s - wait_time);
+	}
+
+	while (true == raw_frame->f_lock) {
+		bool old_value = false;
+		if (true == atomic_compare_exchange_strong(reinterpret_cast<atomic_bool *>(&raw_frame->f_lock), &old_value, true)) break;
+		check_recv();
+	}
+	memcpy(raw_frame->frame_data, frame, frame_size);
+	raw_frame->last_update = system_clock::now();
+	raw_frame->sequence++;
+	raw_frame->size = frame_size;
+	last_seq_num = raw_frame->sequence;
+	raw_frame->f_lock = false;
+}
+
+void NIC::RecvFrame(int* frame_size, char* frame)
+{
+	RAW_FRAME f;
+	*frame_size = 0;
+	check_recv();
+	if (false == frame_queue.try_pop(f)) return;
+	*frame_size = f.size;
+	memcpy(frame, f.frame_data, f.size);
+	return;
+}
+
+void do_node_NIC(char node_id, NIC& g_conn)
+{
+	while (true) {
+		int data_size;
+		char frame[MAX_DATA_SIZE];
+		g_conn.RecvFrame(&data_size, frame);
+		if (0 != data_size)
+			interrupt_from_link(g_conn, data_size, frame);
+	}
 }
 
 int main()
 {
 	std::wcout.imbue(std::locale("korean"));
-	for (int i = 0; i < NUM_NODES; ++i)
-		g_conn[i].init(i);
+
 	char node_type;
 
 	for (;;) {
-		wcout << L"\n허브이면 (H), 노드이면 연결된 허브의 포트 ID (A, B, C 또는 D)를 입력하시오. : ";
+		wcout << L"\n새 노드를 시작합니다. MAC 주소 (A 에서 Z)를 입력하시오. : ";
 		cin >> node_type;
 		node_type = toupper(node_type);
 		if ('H' == node_type) break;
-		if ((node_type >= 'A') && (node_type <= 'D')) break;
+		if ((node_type >= 'A') && (node_type <= 'Z')) break;
 		cout << "Wrong Node Type!\n\n";
 	}
 
 	char mess[200];
 	cin.getline(mess, 199);
-	if ('H' == node_type) {
-		vector <thread> nic;
-		nic.emplace_back(do_hub_NIC0, ref(g_conn[0]));
-		nic.emplace_back(do_hub_NIC1, ref(g_conn[1]));
-		nic.emplace_back(do_hub_NIC2, ref(g_conn[2]));
-		nic.emplace_back(do_hub_NIC3, ref(g_conn[3]));
-		do_hub();
-		for (auto& th : nic)
-			th.join();
-	}
-	else {
-		thread nic{ do_node_NIC, node_type, ref(g_conn[node_type - 'A']) };
-		do_node(node_type);
-		nic.join();
-	}
+	thread nic{ do_node_NIC, node_type, ref(g_nic) };
+	g_nic.Init(node_type);
+	do_node(g_nic);
+	nic.join();
 }

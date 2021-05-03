@@ -21,7 +21,7 @@
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
-    <ProjectGuid>{2b308837-b95c-4fa4-a8ea-e1b49abe2425}</ProjectGuid>
+    <ProjectGuid>{48f469f8-f458-4010-b03d-a6ad0d428471}</ProjectGuid>
     <RootNamespace>HW05</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
@@ -139,7 +139,6 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="hub.cpp" />
     <ClCompile Include="node.cpp" />
     <ClCompile Include="NODE_BASE.cpp" />
   </ItemGroup>
