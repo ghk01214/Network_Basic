@@ -4,6 +4,11 @@
 #include <queue>
 #include "conn.h"
 
+enum PortNum
+{
+	A, B, C, D
+};
+
 constexpr int MAX_NODES = 16;
 extern const unsigned int NUM_NODES;
 
@@ -13,8 +18,9 @@ constexpr int NIC_STATE_IDLE = 0;
 constexpr int NIC_STATE_HAVE_CMD = 1;
 constexpr int NIC_STATE_DONE = 2;
 
+bool active[4]{ false };
 string message[4]{};
-const chrono::microseconds CLOCK{ 100000 };
+const chrono::microseconds CLOCK{ 10000 };
 
 struct NIC {						// g_conn을 관리하기 위한 관리 객체
 	string m_nic_name;
@@ -29,7 +35,7 @@ NIC g_nic[4];
 
 bool send_message(chrono::high_resolution_clock::time_point& tp, int num, unsigned int c, CONN& g_conn);
 
-char recieve_message(chrono::high_resolution_clock::time_point& tp, int num, int cmd, CONN& g_conn, string& recieveMessage)
+char recieve_message(chrono::high_resolution_clock::time_point& tp, int num, CONN& g_conn, string& recieveMessage)
 {
 	char c{};
 
@@ -39,19 +45,16 @@ char recieve_message(chrono::high_resolution_clock::time_point& tp, int num, int
 
 		if (chrono::high_resolution_clock::now() > tp + CLOCK)
 		{
-			if (cmd == 1)
+			if (g_conn.get())
 			{
-				if (g_conn.get())
-				{
-					c |= 1 << i;
-				}
+				c |= 1 << i;
 			}
 
 			tp += CLOCK;
 		}
 	}
 
-	if (cmd == 1)
+	if (num != 1)
 	{
 		recieveMessage.push_back(c);
 	}
@@ -61,15 +64,15 @@ char recieve_message(chrono::high_resolution_clock::time_point& tp, int num, int
 
 void send_command_to_NIC(NIC& nic)
 {
-	//while (active);
-	//if (!active)
-	//{
-	//	nic.g_send_state = NIC_STATE_HAVE_CMD;
-	//}
+	while (active);
+	if (!active)
+	{
+		nic.g_send_state = NIC_STATE_HAVE_CMD;
+	}
 
-	//while (nic.g_send_state != NIC_STATE_DONE);
+	while (nic.g_send_state != NIC_STATE_DONE);
 
-	//nic.g_send_state = NIC_STATE_IDLE;
+	nic.g_send_state = NIC_STATE_IDLE;
 }
 
 void do_hub()
@@ -85,90 +88,26 @@ void do_hub()
 		g_nic[i].g_send_state = NIC_STATE_IDLE;
 	}
 
-	while (true);
+	while (true)
+	{
+		
+	}
 }
 
 void do_hub_NIC0(CONN& g_conn)
 {
 	bool startReading{ false };
 	bool readingFinished{ false };
-	string temp{};
 
-	constexpr int PORT_NUM = 0;
+	constexpr int PORT_NUM = A;
 	NIC& nic = g_nic[PORT_NUM];
 
 	while (true)
 	{
-		while (nic.g_send_state == NIC_STATE_IDLE)
-		{
-			auto time = chrono::high_resolution_clock::now();
-
-			if ((message[PORT_NUM].size() > 0) && !(message[PORT_NUM].front() >= 'A' && message[PORT_NUM].front() <= 'D'))
-			{
-				cout << "clear!" << endl;
-				message[PORT_NUM].clear();
-				startReading = false;
-			}
-
-			if (!startReading)
-			{
-				startReading = g_conn.get();
-			}
-			else
-			{
-				// 메세지 수신
-				recieve_message(time, 8, 1, g_conn, message[PORT_NUM]);
-				recieve_message(time, 1, 0, g_conn, message[PORT_NUM]);
-
-				startReading = false;
-
-				//cout << "A : " << message[PORT_NUM] << endl;
-
-				if (message[PORT_NUM].back() == '\0')
-				{
-					if (message[PORT_NUM][1] == 'A')
-					{
-						readingFinished = true;
-					}
-					else
-					{
-						message[PORT_NUM].clear();
-						cout << "clear!" << endl;
-					}
-				}
-			}
-
-			// queue에 메세지가 존재하고 A 노드로부터 전송받고 있는 메세지가 없을 때
-			if (!nic.messageQueue.empty() && message[PORT_NUM].empty())
-			{
-				message[PORT_NUM].clear();
-				message[PORT_NUM] = nic.messageQueue.front();
-
-				nic.messageQueue.pop();
-
-				nic.g_send_state = NIC_STATE_HAVE_CMD;
-			}
-
-			if (readingFinished)
-			{
-				temp = message[PORT_NUM];
-
-				cout << endl << "Node " << message[PORT_NUM][1] << " sent [";
-
-				temp.erase(0, 2);
-				temp.erase(temp.end() - 1, temp.end());
-
-				cout << temp << "] to Node" << message[PORT_NUM][0] << endl;
-
-				nic.g_send_state = NIC_STATE_HAVE_CMD;
-				readingFinished = false;
-			}
-		}
+		auto time = chrono::high_resolution_clock::now();
 
 		if (nic.g_send_state == NIC_STATE_HAVE_CMD)
 		{
-			auto time = chrono::high_resolution_clock::now();
-
 			// 수신자가 A 노드이면
 			if (message[PORT_NUM][0] == 'A')
 			{
@@ -184,46 +123,27 @@ void do_hub_NIC0(CONN& g_conn)
 				send_message(time, 1, 1, g_conn);
 				send_message(time, 8, '\0', g_conn);
 				send_message(time, 1, 0, g_conn);
-
-				cout << "Complete Sending" << endl;
 			}
 			else
 			{
-				cout << "Send Message from " << nic.m_nic_name << ", to Port " << message[PORT_NUM][0] << " : " << temp << endl;
+				cout << "Send Message from " << nic.m_nic_name << ", to Port " << message[PORT_NUM][0] << " : ";
 
-				g_nic[message[PORT_NUM][0] - 'A'].messageQueue.push(message[PORT_NUM]);
+				for (auto i{ message[PORT_NUM].cbegin() + 2 }; i != message[PORT_NUM].cend(); ++i)
+				{
+					cout << *i;
+				}
+
+				cout << endl;
+
+				g_nic[message[PORT_NUM][0] - 'A'].messageQueue.emplace(message[PORT_NUM]);
 			}
 
 			message[PORT_NUM].clear();
-			temp.clear();
 
 			nic.g_send_state = NIC_STATE_IDLE;
 		}
-	}
-}
-
-void do_hub_NIC1(CONN& g_conn)
-{
-	bool startReading{ false };
-	bool readingFinished{ false };
-	string temp{};
-
-	constexpr int PORT_NUM = 1;
-	NIC& nic = g_nic[PORT_NUM];
-
-	while (true)
-	{
-		while (nic.g_send_state == NIC_STATE_IDLE)
+		else if (nic.g_send_state == NIC_STATE_IDLE)
 		{
-			auto time = chrono::high_resolution_clock::now();
-
-			if ((message[PORT_NUM].size() > 0) && !(message[PORT_NUM].front() >= 'A' && message[PORT_NUM].front() <= 'D'))
-			{
-				cout << "clear!" << endl;
-				message[PORT_NUM].clear();
-				startReading = false;
-			}
-
 			if (!startReading)
 			{
 				startReading = g_conn.get();
@@ -231,23 +151,21 @@ void do_hub_NIC1(CONN& g_conn)
 			else
 			{
 				// 메세지 수신
-				recieve_message(time, 8, 1, g_conn, message[PORT_NUM]);
-				recieve_message(time, 1, 0, g_conn, message[PORT_NUM]);
+				recieve_message(time, 8, g_conn, message[PORT_NUM]);
+				recieve_message(time, 1, g_conn, message[PORT_NUM]);
 
 				startReading = false;
 
-				//cout << "B : " << message[PORT_NUM] << endl;
-
 				if (message[PORT_NUM].back() == '\0')
 				{
-					if (message[PORT_NUM][1] == 'B')
+					// 송신 노드가 A 노드이면
+					if (message[PORT_NUM][1] == 'A')
 					{
 						readingFinished = true;
 					}
 					else
 					{
 						message[PORT_NUM].clear();
-						cout << "clear!" << endl;
 					}
 				}
 			}
@@ -262,28 +180,40 @@ void do_hub_NIC1(CONN& g_conn)
 
 				nic.g_send_state = NIC_STATE_HAVE_CMD;
 			}
-
-			if (readingFinished)
-			{
-				temp = message[PORT_NUM];
-
-				cout << endl << "Node " << message[PORT_NUM][1] << " sent [";
-
-				temp.erase(0, 2);
-				temp.erase(temp.end() - 1, temp.end());
-
-				cout << temp << "] to Node" << message[PORT_NUM][0] << endl;
-
-				nic.g_send_state = NIC_STATE_HAVE_CMD;
-				readingFinished = false;
-			}
 		}
+
+		if (readingFinished)
+		{
+			cout << endl << "Node " << message[PORT_NUM][1] << " sent [";
+
+			for (auto i{ message[PORT_NUM].cbegin() + 2 }; i != message[PORT_NUM].cend(); ++i)
+			{
+				cout << *i;
+			}
+
+			cout << "] to Node" << message[PORT_NUM][0] << endl;
+
+			nic.g_send_state = NIC_STATE_HAVE_CMD;
+			readingFinished = false;
+		}
+	}
+}
+
+void do_hub_NIC1(CONN& g_conn)
+{
+	bool startReading{ false };
+	bool readingFinished{ false };
+
+	constexpr int PORT_NUM = B;
+	NIC& nic = g_nic[PORT_NUM];
+
+	while (true)
+	{
+		auto time = chrono::high_resolution_clock::now();
 
 		if (nic.g_send_state == NIC_STATE_HAVE_CMD)
 		{
-			auto time = chrono::high_resolution_clock::now();
-
-			// 수신자가 B 노드이면
+			// 수신자가 A 노드이면
 			if (message[PORT_NUM][0] == 'B')
 			{
 				// 메세지 전송
@@ -298,46 +228,27 @@ void do_hub_NIC1(CONN& g_conn)
 				send_message(time, 1, 1, g_conn);
 				send_message(time, 8, '\0', g_conn);
 				send_message(time, 1, 0, g_conn);
-
-				cout << "Complete Sending" << endl;
 			}
 			else
 			{
-				cout << "Send Message from " << nic.m_nic_name << ", to Port " << message[PORT_NUM][0] << " : " << temp << endl;
+				cout << "Send Message from " << nic.m_nic_name << ", to Port " << message[PORT_NUM][0] << " : ";
 
-				g_nic[message[PORT_NUM][0] - 'A'].messageQueue.push(message[PORT_NUM]);
+				for (auto i{ message[PORT_NUM].cbegin() + 2 }; i != message[PORT_NUM].cend(); ++i)
+				{
+					cout << *i;
+				}
+
+				cout << endl;
+
+				g_nic[message[PORT_NUM][0] - 'A'].messageQueue.emplace(message[PORT_NUM]);
 			}
 
 			message[PORT_NUM].clear();
-			temp.clear();
 
 			nic.g_send_state = NIC_STATE_IDLE;
 		}
-	}
-}
-
-void do_hub_NIC2(CONN& g_conn)
-{
-	bool startReading{ false };
-	bool readingFinished{ false };
-	string temp{};
-
-	constexpr int PORT_NUM = 2;
-	NIC& nic = g_nic[PORT_NUM];
-
-	while (true)
-	{
-		while (nic.g_send_state == NIC_STATE_IDLE)
+		else if (nic.g_send_state == NIC_STATE_IDLE)
 		{
-			auto time = chrono::high_resolution_clock::now();
-
-			if ((message[PORT_NUM].size() > 0) && !(message[PORT_NUM].front() >= 'A' && message[PORT_NUM].front() <= 'D'))
-			{
-				cout << "clear!" << endl;
-				message[PORT_NUM].clear();
-				startReading = false;
-			}
-
 			if (!startReading)
 			{
 				startReading = g_conn.get();
@@ -345,23 +256,21 @@ void do_hub_NIC2(CONN& g_conn)
 			else
 			{
 				// 메세지 수신
-				recieve_message(time, 8, 1, g_conn, message[PORT_NUM]);
-				recieve_message(time, 1, 0, g_conn, message[PORT_NUM]);
+				recieve_message(time, 8, g_conn, message[PORT_NUM]);
+				recieve_message(time, 1, g_conn, message[PORT_NUM]);
 
 				startReading = false;
 
-				//cout << "C : " << message[PORT_NUM] << endl;
-
 				if (message[PORT_NUM].back() == '\0')
 				{
-					if (message[PORT_NUM][1] == 'C')
+					// 송신 노드가 A 노드이면
+					if (message[PORT_NUM][1] == 'B')
 					{
 						readingFinished = true;
 					}
 					else
 					{
 						message[PORT_NUM].clear();
-						cout << "clear!" << endl;
 					}
 				}
 			}
@@ -376,28 +285,40 @@ void do_hub_NIC2(CONN& g_conn)
 
 				nic.g_send_state = NIC_STATE_HAVE_CMD;
 			}
-
-			if (readingFinished)
-			{
-				temp = message[PORT_NUM];
-
-				cout << endl << "Node " << message[PORT_NUM][1] << " sent [";
-
-				temp.erase(0, 2);
-				temp.erase(temp.end() - 1, temp.end());
-
-				cout << temp << "] to Node" << message[PORT_NUM][0] << endl;
-
-				nic.g_send_state = NIC_STATE_HAVE_CMD;
-				readingFinished = false;
-			}
 		}
+
+		if (readingFinished)
+		{
+			cout << endl << "Node " << message[PORT_NUM][1] << " sent [";
+
+			for (auto i{ message[PORT_NUM].cbegin() + 2 }; i != message[PORT_NUM].cend(); ++i)
+			{
+				cout << *i;
+			}
+
+			cout << "] to Node" << message[PORT_NUM][0] << endl;
+
+			nic.g_send_state = NIC_STATE_HAVE_CMD;
+			readingFinished = false;
+		}
+	}
+}
+
+void do_hub_NIC2(CONN& g_conn)
+{
+	bool startReading{ false };
+	bool readingFinished{ false };
+
+	constexpr int PORT_NUM = C;
+	NIC& nic = g_nic[PORT_NUM];
+
+	while (true)
+	{
+		auto time = chrono::high_resolution_clock::now();
 
 		if (nic.g_send_state == NIC_STATE_HAVE_CMD)
 		{
-			auto time = chrono::high_resolution_clock::now();
-
-			// 수신자가 C 노드이면
+			// 수신자가 A 노드이면
 			if (message[PORT_NUM][0] == 'C')
 			{
 				// 메세지 전송
@@ -412,70 +333,53 @@ void do_hub_NIC2(CONN& g_conn)
 				send_message(time, 1, 1, g_conn);
 				send_message(time, 8, '\0', g_conn);
 				send_message(time, 1, 0, g_conn);
-
-				cout << "Complete Sending" << endl;
 			}
 			else
 			{
-				cout << "Send Message from " << nic.m_nic_name << ", to Port " << message[PORT_NUM][0] << " : " << temp << endl;
+				cout << "Send Message from " << nic.m_nic_name << ", to Port " << message[PORT_NUM][0] << " : ";
 
-				g_nic[message[PORT_NUM][0] - 'A'].messageQueue.push(message[PORT_NUM]);
+				for (auto i{ message[PORT_NUM].cbegin() + 2 }; i != message[PORT_NUM].cend(); ++i)
+				{
+					cout << *i;
+				}
+
+				cout << endl;
+
+				g_nic[message[PORT_NUM][0] - 'A'].messageQueue.emplace(message[PORT_NUM]);
 			}
 
 			message[PORT_NUM].clear();
-			temp.clear();
 
 			nic.g_send_state = NIC_STATE_IDLE;
 		}
-	}
-}
-
-void do_hub_NIC3(CONN& g_conn)
-{
-	bool startReading{ false };
-	bool readingFinished{ false };
-	string temp{};
-
-	constexpr int PORT_NUM = 3;
-	NIC& nic = g_nic[PORT_NUM];
-
-	while (true)
-	{
-		while (nic.g_send_state == NIC_STATE_IDLE)
+		else if (nic.g_send_state == NIC_STATE_IDLE)
 		{
-			auto time = chrono::high_resolution_clock::now();
-
-			if ((message[PORT_NUM].size() > 0) && !(message[PORT_NUM].front() >= 'A' && message[PORT_NUM].front() <= 'D'))
-			{
-				cout << "clear!" << endl;
-				message[PORT_NUM].clear();
-				startReading = false;
-			}
-
 			if (!startReading)
 			{
 				startReading = g_conn.get();
 			}
 			else
 			{
+				active[C] = true;
+
 				// 메세지 수신
-				recieve_message(time, 8, 1, g_conn, message[PORT_NUM]);
-				recieve_message(time, 1, 0, g_conn, message[PORT_NUM]);
+				recieve_message(time, 8, g_conn, message[PORT_NUM]);
+				recieve_message(time, 1, g_conn, message[PORT_NUM]);
 
 				startReading = false;
 
-				//cout << "D : " << message[PORT_NUM] << endl;
-
 				if (message[PORT_NUM].back() == '\0')
 				{
-					if (message[PORT_NUM][1] == 'D')
+					// 송신 노드가 A 노드이면
+					if (message[PORT_NUM][1] == 'C')
 					{
 						readingFinished = true;
 					}
 					else
 					{
 						message[PORT_NUM].clear();
-						cout << "clear!" << endl;
+
+						active[C] = false;
 					}
 				}
 			}
@@ -487,30 +391,42 @@ void do_hub_NIC3(CONN& g_conn)
 				message[PORT_NUM] = nic.messageQueue.front();
 
 				nic.messageQueue.pop();
-
 				nic.g_send_state = NIC_STATE_HAVE_CMD;
-			}
-
-			if (readingFinished)
-			{
-				temp = message[PORT_NUM];
-
-				cout << endl << "Node " << message[PORT_NUM][1] << " sent [";
-
-				temp.erase(0, 2);
-				temp.erase(temp.end() - 1, temp.end());
-
-				cout << temp << "] to Node" << message[PORT_NUM][0] << endl;
-
-				nic.g_send_state = NIC_STATE_HAVE_CMD;
-				readingFinished = false;
 			}
 		}
 
+		if (readingFinished)
+		{
+			cout << endl << "Node " << message[PORT_NUM][1] << " sent [";
+
+			for (auto i{ message[PORT_NUM].cbegin() + 2 }; i != message[PORT_NUM].cend(); ++i)
+			{
+				cout << *i;
+			}
+
+			cout << "] to Node" << message[PORT_NUM][0] << endl;
+
+			nic.g_send_state = NIC_STATE_HAVE_CMD;
+			readingFinished = false;
+			active[C] = false;
+		}
+	}
+}
+
+void do_hub_NIC3(CONN& g_conn)
+{
+	bool startReading{ false };
+	bool readingFinished{ false };
+
+	constexpr int PORT_NUM = D;
+	NIC& nic = g_nic[PORT_NUM];
+
+	while (true)
+	{
+		auto time = chrono::high_resolution_clock::now();
+
 		if (nic.g_send_state == NIC_STATE_HAVE_CMD)
 		{
-			auto time = chrono::high_resolution_clock::now();
-
 			// 수신자가 A 노드이면
 			if (message[PORT_NUM][0] == 'D')
 			{
@@ -526,20 +442,82 @@ void do_hub_NIC3(CONN& g_conn)
 				send_message(time, 1, 1, g_conn);
 				send_message(time, 8, '\0', g_conn);
 				send_message(time, 1, 0, g_conn);
-
-				cout << "Complete Sending" << endl;
 			}
 			else
 			{
-				cout << "Send Message from " << nic.m_nic_name << ", to Port " << message[PORT_NUM][0] << " : " << temp << endl;
+				cout << "Send Message from " << nic.m_nic_name << ", to Port " << message[PORT_NUM][0] << " : ";
 
-				g_nic[message[PORT_NUM][0] - 'A'].messageQueue.push(message[PORT_NUM]);
+				for (auto i{ message[PORT_NUM].cbegin() + 2 }; i != message[PORT_NUM].cend(); ++i)
+				{
+					cout << *i;
+				}
+
+				cout << endl;
+
+				g_nic[message[PORT_NUM][0] - 'A'].messageQueue.emplace(message[PORT_NUM]);
 			}
 
 			message[PORT_NUM].clear();
-			temp.clear();
 
-			nic.g_send_state = NIC_STATE_IDLE;
+			nic.g_send_state = NIC_STATE_DONE;
+		}
+		else if (nic.g_send_state == NIC_STATE_IDLE)
+		{
+			if (!startReading)
+			{
+				startReading = g_conn.get();
+			}
+			else
+			{
+				active[D] = true;
+
+				// 메세지 수신
+				recieve_message(time, 8, g_conn, message[PORT_NUM]);
+				recieve_message(time, 1, g_conn, message[PORT_NUM]);
+
+				startReading = false;
+
+				if (message[PORT_NUM].back() == '\0')
+				{
+					// 송신 노드가 A 노드이면
+					if (message[PORT_NUM][1] == 'D')
+					{
+						readingFinished = true;
+					}
+					else
+					{
+						message[PORT_NUM].clear();
+
+						active[D] = false;
+					}
+				}
+			}
+
+			// queue에 메세지가 존재하고 A 노드로부터 전송받고 있는 메세지가 없을 때
+			if (!nic.messageQueue.empty() && message[PORT_NUM].empty())
+			{
+				message[PORT_NUM].clear();
+				message[PORT_NUM] = nic.messageQueue.front();
+
+				nic.messageQueue.pop();
+				nic.g_send_state = NIC_STATE_HAVE_CMD;
+			}
+		}
+
+		if (readingFinished)
+		{
+			cout << endl << "Node " << message[PORT_NUM][1] << " sent [";
+
+			for (auto i{ message[PORT_NUM].cbegin() + 2 }; i != message[PORT_NUM].cend(); ++i)
+			{
+				cout << *i;
+			}
+
+			cout << "] to Node" << message[PORT_NUM][0] << endl;
+
+			nic.g_send_state = NIC_STATE_HAVE_CMD;
+			readingFinished = false;
+			active[D] = false;
 		}
 	}
 }
